@@ -1,6 +1,8 @@
 # wechat API MAP
 
 
+
+```
        +--------------+     +---------------+   +---------------+
        |              |     |               |   |               |
        |   Get UUID   |     |  Get Contact  |   | Status Notify |
@@ -25,7 +27,4 @@
 |             |
 |QRCode Scaned|
 +-------------+
-
-
-
-
+```

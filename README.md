@@ -1,3 +1,10 @@
+#开发过程中参考了 
+
+https://github.com/nodeWechat/wechat4u
+
+https://github.com/Urinx/WeixinBot
+
+
 # wechat API MAP
 
 

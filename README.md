@@ -1,8 +1,5 @@
-#开发过程中参考了 
+这是一个由akka实现的微信客户端, 可以在同一个进程中登录很多个微信账号, 每一个微信账号的登录对应于不同的Actor实例.
 
-https://github.com/nodeWechat/wechat4u
-
-https://github.com/Urinx/WeixinBot
 
 
 # wechat API MAP
@@ -35,3 +32,10 @@ https://github.com/Urinx/WeixinBot
 |QRCode Scaned|
 +-------------+
 ```
+
+#开发过程中参考了 
+
+https://github.com/nodeWechat/wechat4u
+
+https://github.com/Urinx/WeixinBot
+

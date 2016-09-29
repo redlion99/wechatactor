@@ -9,6 +9,17 @@
 
 支持多租户
 
+#启动方式
+
+```
+  val system = ActorSystem("wechat")
+
+  val bootstrap = system.actorOf(Props[Bootstrap])
+
+  bootstrap ! ("start", "1"+DateTime.now().toString("MMddHH"))
+  
+```
+  
 
 # wechat API MAP
 

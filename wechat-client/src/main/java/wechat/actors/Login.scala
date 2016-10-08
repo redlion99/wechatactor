@@ -1,6 +1,6 @@
 package wechat.actors
 
-import akka.actor.{Actor, ActorLogging, Props}
+import akka.actor.{Actor, ActorLogging, PoisonPill, Props}
 import akka.actor.Actor.Receive
 import akka.http.scaladsl.model.{HttpHeader, HttpMethods, HttpRequest}
 import akka.http.scaladsl.model.Uri.Query
@@ -28,13 +28,14 @@ class Login(val httpPool: HttpPool, props:Props) extends HttpClient with ActorLo
   override def receive: Receive = {
     case ("start",sessionId:String) =>
       val me = self
-
+      val oSender = sender()
       httpPool.sendRequest(
         GetParams("https://login.weixin.qq.com/jslogin"
           ,Map("appid"->"wx782c26e4c19acffb","fun"->"new","lang"->"zh_CN","_"->DateTime.now().getMillis.toString))
         ,"login").map(parseTextResponse(_)).filter(_.contains(("window.QRLogin.code","200"))).map(_.get("window.QRLogin.uuid")).onComplete{
         case Success(Some(uuid))=>
           me ! QrCode(uuid.slice(1,uuid.length-1))
+          oSender ! QrCode(uuid.slice(1,uuid.length-1))
         case Failure(e) =>
           log.error(e,"get qrcode failed")
       }
@@ -175,6 +176,8 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging{
             log.info(q.get("window.synccheck").toString)
             q.get("window.synccheck").map(x=>(x.slice(1,x.length-1)).split(","))
               .foreach{
+                case Array("retcode:\"1101\"",_)=>
+                  me ! PoisonPill
                 case Array(_,"selector:\"0\"")=>
                   log.info(s"nothing to get ")
                   me ! SyncCheck(syncKey)

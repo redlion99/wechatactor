@@ -10,6 +10,7 @@
     <version>0.7</version>
     <modules>
         <module>wechat-client</module>
+        <module>wechat-app</module>
     </modules>
 
     <properties>
@@ -88,6 +89,7 @@
     </dependencies>
 
     <build>
+        <finalName>wechat-actors</finalName>
         <plugins>
             <plugin>
                 <groupId>org.scala-tools</groupId>
@@ -110,6 +112,7 @@
                     </jvmArgs>
                 </configuration>
             </plugin>
+
         </plugins>
     </build>
 

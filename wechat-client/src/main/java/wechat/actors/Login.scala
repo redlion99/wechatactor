@@ -11,7 +11,8 @@ import spray.json.{JsString, _}
 import scala.concurrent.duration.{Duration, FiniteDuration}
 import scala.util.{Failure, Success}
 import scala.xml._
-import scala.collection.immutable
+import scala.collection.{immutable, mutable}
+import scala.concurrent.Future
 
 /**
   * Created by libin on 16/9/28.
@@ -70,6 +71,7 @@ class Login(val httpPool: HttpPool, props: Props) extends HttpClient with ActorL
             log.warning("login timeout")
       }
     case ReceiveTimeout =>
+      context.children.foreach(_!PoisonPill)
       self ! PoisonPill
     case _ =>
   }
@@ -114,6 +116,8 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging {
   var contactListSaved: Map[String, Contact] = Map.empty
 
   var loginUrl = ""
+
+  val groupToInvite="粉丝俱乐部"
 
   def baseRequest(): JsObject = {
     JsObject("Uin" -> JsString(state.uin), "Sid" -> JsString(state.sid)
@@ -162,6 +166,7 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging {
               me ! ClientState(user, version.toString())
               me ! SyncCheck(SyncKey(key))
               me !("ContactList", contactList)
+              getContact
             case x =>
               log.warning(s"unknown $x")
           }
@@ -173,7 +178,8 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging {
       log.info("client info: " + s)
       clientState = Some(s)
     case ("ContactList", contactList: JsArray) =>
-      contactListSaved = (contactList.elements.map(_.asJsObject.getFields("UserName", "NickName", "ContactFlag") match {
+      log.info("updating contact list")
+      contactListSaved = contactListSaved ++ (contactList.elements.map(_.asJsObject.getFields("UserName", "NickName", "ContactFlag") match {
         case Seq(JsString(userName), JsString(nickName), JsNumber(contactFlag)) =>
           (userName, Contact(userName, nickName, contactFlag.toInt))
       }) ++ clientState.map(_.user).map(_.getFields("UserName", "NickName") match {
@@ -181,13 +187,14 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging {
           (userName, Contact(userName, nickName, 0))
       })).toMap
     case SyncCheck(syncKey: SyncKey) =>
+      context.parent ! "SyncCheck"
       val me = self
       httpPool.sendRequest(GetParams("https://webpush.weixin.qq.com/cgi-bin/mmwebwx-bin/synccheck"
         , Map("r" -> DateTime.now().getMillis.toString, "skey" -> state.skey, "uin" -> state.uin, "sid" -> state.sid, "deviceid" -> sessionId, "synckey" -> syncKey.toString, "_" -> DateTime.now().getMillis.toString))
         .withHeaders(cookieHeaders), "SyncCheck")
         .map(parseTextResponse(_)).onComplete {
         case Success(q: Query) =>
-          log.info(q.get("window.synccheck").toString)
+          log.info("window.synccheck = "+q.get("window.synccheck").toString + self.path)
           q.get("window.synccheck").map(x => (x.slice(1, x.length - 1)).split(","))
             .foreach {
               case Array("retcode:\"1101\"", _) =>
@@ -197,11 +204,12 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging {
                 log.info(s"nothing to get ")
                 me ! SyncCheck(syncKey)
               case s =>
+                log.info("fetch new messages ")
                 me ! Sync(syncKey)
             }
 
         case Failure(e) =>
-          log.info(e.getMessage)
+          log.error(e.getMessage)
           me ! SyncCheck(syncKey)
       }
     case Sync(syncKey: SyncKey) =>
@@ -212,9 +220,32 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging {
         , json).withHeaders(cookieHeaders), "SyncMsg")
         .onComplete {
           case Success(response: String) =>
-            response.parseJson.asJsObject.getFields("BaseResponse", "AddMsgList", "SyncKey") match {
-              case x@Seq(base: JsObject, msgList: JsArray, key: JsObject) =>
+            response.parseJson.asJsObject.getFields("BaseResponse", "AddMsgList", "SyncKey", "ModContactList") match {
+              case x@Seq(base: JsObject, msgList: JsArray, key: JsObject, newContactList:JsArray) =>
                 log.info(x.toString())
+                contactListSaved = contactListSaved ++ (newContactList.elements.map(_.asJsObject.getFields("UserName", "NickName", "ContactFlag") match {
+                  case Seq(JsString(userName), JsString(nickName), JsNumber(contactFlag)) =>
+                    (userName, Contact(userName, nickName, contactFlag.toInt))
+                }) ++ clientState.map(_.user).map(_.getFields("UserName", "NickName") match {
+                  case Seq(JsString(userName), JsString(nickName)) =>
+                    (userName, Contact(userName, nickName, 0))
+                })).map{
+                  case (userName,contact)=>
+                    if(!contactListSaved.contains(userName)){
+                      log.info("new member added "+userName)
+                      contactListSaved.find{case (s,c)=> c.nickName.contains(groupToInvite)} foreach  {
+                        case (gid,_) =>
+                          log.info(s" invite $userName to $gid")
+                          inviteFriendToGroup(userName,gid).onComplete{
+                            case Success(x)=>
+                              x.map(x=> log.info(x.prettyPrint))
+                            case Failure(e)=>
+                              log.error(e,"invite friend to group failed")
+                          }
+                      }
+                    }
+                    (userName,contact)
+                }.toMap
                 base.getFields("Ret") match {
                   case Seq(JsNumber(ret)) if ret == 0 =>
                     msgList.elements.map(_.asJsObject.getFields("Content", "FromUserName", "ToUserName")).foreach {
@@ -235,19 +266,42 @@ class InitActor(val httpPool: HttpPool) extends HttpClient with ActorLogging {
                         log.info(msg.prettyPrint)
 
                     }
-                    me ! SyncCheck(SyncKey(key))
+                    //if(msgList.elements.size>0){
+                      me ! SyncCheck(SyncKey(key))
+                    //}
+
                   case _ =>
                 }
 
 
             }
           case Failure(e) =>
-            log.info(e.getMessage)
+            log.error(e.getMessage)
             me ! SyncCheck(syncKey)
         }
     case ReceiveTimeout =>
       self ! PoisonPill
     case _ =>
+  }
+
+  def inviteFriendToGroup(uid:String,gid:String): Future[Option[JsObject]] = {
+    val json = JsObject("BaseRequest" -> baseRequest(), "ChatRoomName" -> JsString(gid), "InviteMemberList" -> JsString(uid))
+    log.info(json.prettyPrint)
+    httpPool.sendRequest(PostJson(s"https://wx.qq.com/cgi-bin/mmwebwx-bin/webwxupdatechatroom?fun=invitemember&pass_ticket=${state.pass_ticket}"
+      , json).withHeaders(cookieHeaders), "inviteFriendToGroup").map(_.parseJson.asJsObject.getFields("BaseResponse").headOption.map(_.asJsObject))
+
+  }
+
+  def getContact= {
+    val json = JsObject()
+    val me = self
+    httpPool.sendRequest(PostJson(s"https://wx.qq.com/cgi-bin/mmwebwx-bin/webwxgetcontact?pass_ticket=${state.pass_ticket}&skey=${state.skey}&r=${DateTime.now().getMillis.toString}"
+      , json).withHeaders(cookieHeaders), "getContact").map(_.parseJson.asJsObject.getFields("MemberList").headOption.map(_.asInstanceOf[JsArray])).foreach{
+      case Some(contactList:JsArray)=>
+        me !("ContactList", contactList)
+      case _ =>
+    }
+
   }
 
   val sessionId: String = {
